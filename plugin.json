@@ -1,0 +1,37 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "graph",
+  "version": "1.0.0",
+  "description": "Dependency graph execution through OpenAgent checkpoints.",
+  "license": "MIT",
+  "repository": "https://github.com/BANG404/openagent-graph",
+  "keywords": ["openagent", "graph", "goal", "checkpoint"],
+  "extensions": {
+    "openagent": {
+      "runtime": "graph",
+      "capabilities": ["command", "checkpoint", "parallel-execution"],
+      "message_policies": [
+        {
+          "tag": "graph_bootstrap",
+          "user_visible": true,
+          "model_visible": true
+        },
+        {
+          "tag": "graph_continuation",
+          "user_visible": false,
+          "model_visible": true
+        },
+        {
+          "tag": "graph_node_bootstrap",
+          "user_visible": false,
+          "model_visible": true
+        },
+        {
+          "tag": "graph_node_continuation",
+          "user_visible": false,
+          "model_visible": true
+        }
+      ]
+    }
+  }
+}
