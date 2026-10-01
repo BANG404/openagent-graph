@@ -11,36 +11,65 @@ export function dataRoot() {
   return root;
 }
 
-function fileFor(root, conversationId) {
+function branchKey(branchId) {
+  return typeof branchId === "string" && branchId.trim() !== "" ? branchId.trim() : null;
+}
+
+function fileFor(root, conversationId, branchId = null) {
+  const key = `${String(conversationId)}\u0000${branchKey(branchId) ?? ""}`;
+  const digest = createHash("sha256").update(key).digest("hex");
+  return path.join(root, "graphs", `${digest}.json`);
+}
+
+/** Files written by versions that only scoped a graph to its conversation. */
+function legacyFileFor(root, conversationId) {
   const digest = createHash("sha256").update(String(conversationId)).digest("hex");
   return path.join(root, "graphs", `${digest}.json`);
 }
 
-export function readGraph(root, conversationId) {
-  const file = fileFor(root, conversationId);
-  if (!existsSync(file)) return null;
-  try {
-    return normalize(JSON.parse(readFileSync(file, "utf8")));
-  } catch {
-    return null;
+export function readGraph(root, conversationId, branchId = null) {
+  const requestedBranch = branchKey(branchId);
+  const file = fileFor(root, conversationId, requestedBranch);
+  const candidates = [file];
+  const legacy = legacyFileFor(root, conversationId);
+  if (legacy !== file) candidates.push(legacy);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      const graph = normalize(JSON.parse(readFileSync(candidate, "utf8")));
+      if (graph.conversation_id !== String(conversationId)) continue;
+      if (branchKey(graph.branch_id) !== requestedBranch) continue;
+      return graph;
+    } catch {
+      // A malformed package state file is ignored; another branch can still run.
+    }
   }
+  return null;
 }
 
 export function writeGraph(root, graph) {
   graph.updated_at = Date.now();
-  mkdirSync(path.dirname(fileFor(root, graph.conversation_id)), { recursive: true });
-  writeFileSync(fileFor(root, graph.conversation_id), `${JSON.stringify(graph, null, 2)}\n`, "utf8");
+  const file = fileFor(root, graph.conversation_id, graph.branch_id);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(graph, null, 2)}\n`, "utf8");
 }
 
-export function deleteGraph(root, conversationId) {
-  const file = fileFor(root, conversationId);
+export function deleteGraph(root, conversationId, branchId = null) {
+  const file = fileFor(root, conversationId, branchId);
   if (existsSync(file)) unlinkSync(file);
 }
 
-export function newGraph(conversationId, objective, nodes = []) {
+export function newGraph(conversationId, branchIdOrObjective, objectiveOrNodes, maybeNodes = []) {
+  // Keep the old three-argument helper shape readable for package consumers
+  // while making branch ownership explicit for all new records.
+  const hasBranch = Array.isArray(objectiveOrNodes);
+  const branchId = hasBranch ? null : branchKey(branchIdOrObjective);
+  const objective = hasBranch ? branchIdOrObjective : objectiveOrNodes;
+  const nodes = hasBranch ? objectiveOrNodes : maybeNodes;
   const graph = {
     run_id: randomUUID(),
     conversation_id: String(conversationId),
+    branch_id: branchId,
     objective: String(objective ?? "").trim(),
     nodes: nodes.map((node) => ({
       id: String(node.id).trim(),
@@ -71,6 +100,7 @@ export function normalize(value) {
   return {
     run_id: typeof graph.run_id === "string" ? graph.run_id : randomUUID(),
     conversation_id: String(graph.conversation_id ?? ""),
+    branch_id: branchKey(graph.branch_id),
     objective: String(graph.objective ?? ""),
     nodes: nodes.map((node) => ({
       id: String(node?.id ?? ""),

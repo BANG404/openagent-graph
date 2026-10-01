@@ -7,9 +7,9 @@ OpenAgent supplies the same generic capability bridge available to every
 plugin: conversations, branches, Agent submission and wake, roles, events,
 cancellation, permissions, and ordinary checkpoint storage.
 
-The package uses the portable Agent Plugins 1.0.0 format. Its
-`extensions.openagent.runtime` value is update provenance only; it does not
-select a Graph implementation in the Runtime. The `graph` command is exposed as
+The package uses the portable Agent Plugins 1.0.0 format and is an ordinary
+package; the Runtime does not select or implement Graph behavior. The `graph`
+command is exposed as
 `/graph` through the generic package-id alias; `/graph:graph` remains the full
 namespaced route. `mcp.json` starts `bin/graph-mcp.mjs`, which persists Graph
 state under `PLUGIN_DATA/graphs/` and wakes child Agents through
@@ -17,12 +17,12 @@ state under `PLUGIN_DATA/graphs/` and wakes child Agents through
 
 ## State and recovery
 
-Each parent conversation has one package-owned Graph record. Nodes are validated
-as a DAG, marked started before their child conversation is created, and reduced
-serially as child Agent turns finish. A node stores its child conversation,
-branch, checkpoint, status, and result. The package resumes running records when
-its MCP server starts, and cancellation propagates through the generic
-conversation cancellation bridge.
+Each parent conversation branch has one package-owned Graph record. Nodes are
+validated as a DAG, marked started before their child conversation is created,
+and reduced serially as child Agent turns finish. A node stores its child
+conversation, branch, checkpoint, status, and result. The package resumes
+running records when its MCP server starts, and cancellation propagates through
+the generic conversation cancellation bridge.
 
 `plugin-flow-updated` is a transient display event. The Runtime carries the
 package's optional projection opaquely in checkpoints and never interprets node

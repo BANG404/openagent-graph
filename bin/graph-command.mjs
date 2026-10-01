@@ -20,6 +20,7 @@ async function main() {
   await host("event.emit", {
     name: "plugin-flow-updated",
     payload: {
+      plugin_id: "graph",
       conv_id: conversationId,
       flow_id: "plugin:graph:graph",
       status: "running",

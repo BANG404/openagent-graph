@@ -8,7 +8,6 @@
   "keywords": ["openagent", "graph", "goal", "checkpoint"],
   "extensions": {
     "openagent": {
-      "runtime": "graph",
       "capabilities": ["command", "mcp", "checkpoint", "parallel-execution"],
       "commands": [
         {
