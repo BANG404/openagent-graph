@@ -9,16 +9,15 @@
   "extensions": {
     "openagent": {
       "runtime": "graph",
-      "capabilities": ["flow", "mcp", "checkpoint", "parallel-execution"],
-      "flows": [
+      "capabilities": ["command", "mcp", "checkpoint", "parallel-execution"],
+      "commands": [
         {
           "id": "graph",
           "label": "Graph",
           "description": "Execute dependency-aware graph nodes.",
           "argument": "required_text",
-          "step": "bin/graph-step.mjs",
-          "timeout_secs": 60,
-          "max_iterations": 50
+          "command": "bin/graph-command.mjs",
+          "timeout_secs": 30
         }
       ]
     }

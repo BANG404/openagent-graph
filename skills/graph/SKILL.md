@@ -5,6 +5,8 @@ description: Use OpenAgent Graph Mode when a task can be represented as dependen
 
 # Graph Mode
 
-Graph Mode is provided by the OpenAgent Runtime through the `graph` plugin
-binding. Use `/graph`, `create_goal_graph`, and `graph_read` so dependencies,
-node results, and terminal state remain durable.
+Graph Mode is implemented by this plugin. Start it with `/graph <objective>`;
+then call `create_goal_graph` with a complete DAG and use `graph_read` to follow
+the package-owned run. The plugin creates child conversations and wakes their
+Agents through the generic host bridge. It owns node state, dependencies,
+reduction, recovery, cancellation, and completion.

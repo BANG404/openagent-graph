@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import { context, host } from "./graph-host.mjs";
 import {
   appendUpdate,
@@ -150,12 +151,19 @@ function dependencyResults(graph, node) {
     .join("\n\n");
 }
 
+function currentChild(node) {
+  return node?.child_conv_id && node?.child_branch_id
+    ? { conv_id: node.child_conv_id, branch_id: node.child_branch_id }
+    : null;
+}
+
 async function runNode(conversationId, runId, nodeId) {
   const initial = readGraph(root, conversationId);
   if (!initial || initial.run_id !== runId || isTerminal(initial)) return;
   const node = initial.nodes.find((candidate) => candidate.id === nodeId);
   if (!node || node.status !== "running") return;
-  const created = await host("conversation.create", {
+  const existingChild = currentChild(node);
+  const created = existingChild ?? await host("conversation.create", {
     title: `Graph node ${node.id}`,
     workspace: "",
     parent_conv_id: conversationId,
@@ -176,18 +184,26 @@ async function runNode(conversationId, runId, nodeId) {
     await host("conversation.cancel", { conv_id: created.conv_id }).catch(() => {});
     return;
   }
-  await host("event.emit", {
-    name: "subagent-started",
-    payload: {
-      parent_conv_id: conversationId,
-      sub_conv_id: current.child_conv_id,
-      title: `Graph node ${node.id}`,
-      task: node.task,
-      branch_id: node.child_branch_id,
-      hidden_task: true,
-      flow_kind: "graph-node",
-    },
-  }).catch(() => {});
+  const detail = await host("conversation.state", { conv_id: current.child_conv_id });
+  const taskMessageId = randomUUID();
+  const assistantMessageId = randomUUID();
+  if (!existingChild) {
+    await host("event.emit", {
+      name: "subagent-started",
+      payload: {
+        parent_conv_id: conversationId,
+        sub_conv_id: current.child_conv_id,
+        title: `Graph node ${node.id}`,
+        task: node.task,
+        task_msg_id: taskMessageId,
+        asst_msg_id: assistantMessageId,
+        workspace: String(detail?.workspace ?? ""),
+        branch_id: current.child_branch_id,
+        hidden_task: true,
+        flow_kind: "graph-node",
+      },
+    }).catch(() => {});
+  }
   const dependency = dependencyResults(graph, current);
   const prompt = [
     "You are executing one node from an OpenAgent Graph.",
@@ -197,17 +213,28 @@ async function runNode(conversationId, runId, nodeId) {
     dependency ? `Completed dependency results:\n${dependency}` : "This node has no dependency results.",
     "Execute only this node and finish with a concise result.",
   ].join("\n\n");
-  const response = await host("agent.submit", {
+  const response = await host("agent.wake", {
     request: {
       conv_id: current.child_conv_id,
       branch_id: current.child_branch_id,
       text: prompt,
-      parent_checkpoint_id: null,
+      parent_checkpoint_id: detail.checkpoint_id ?? null,
       attachments: [],
       contexts: [],
       model_binding: null,
       user_message_id: null,
-      assistant_message_id: null,
+      assistant_message_id: assistantMessageId,
+      hidden: true,
+      flow: {
+        kind: "plugin",
+        state: {
+          plugin_id: "graph",
+          flow_id: "plugin:graph:graph",
+          title: graph.objective,
+          status: graph.status,
+          items: projection(graph).items,
+        },
+      },
     },
   });
   const messages = response?.state?.messages ?? [];
@@ -234,6 +261,28 @@ async function runGraph(conversationId, runId) {
     while (true) {
       const graph = readGraph(root, conversationId);
       if (!graph || graph.run_id !== runId || isTerminal(graph)) return;
+      const running = graph.nodes.filter((node) => node.status === "running");
+      if (running.length > 0) {
+        await Promise.all(running.map((node) => runNode(conversationId, runId, node.id).catch((error) =>
+          runMutation(() => {
+            const latest = readGraph(root, conversationId);
+            if (!latest || latest.run_id !== runId || isTerminal(latest)) return;
+            const failed = latest.nodes.find((candidate) => candidate.id === node.id);
+            if (!failed || failed.status !== "running") return;
+            failed.status = "failed";
+            failed.result = String(error?.message ?? error);
+            latest.status = "failed";
+            writeGraph(root, latest);
+            emit(latest, "node-failed", { node_id: node.id });
+          }),
+        )));
+        const resumed = readGraph(root, conversationId);
+        if (!resumed || resumed.run_id !== runId || isTerminal(resumed)) return;
+        reconcile(resumed);
+        writeGraph(root, resumed);
+        emit(resumed, "advance");
+        continue;
+      }
       const runnable = graph.nodes.filter((node) =>
         node.status === "pending" && node.depends_on.every((dependency) =>
           graph.nodes.some((candidate) => candidate.id === dependency && candidate.status === "completed"),
@@ -413,3 +462,23 @@ process.stdin.on("data", (chunk) => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
+
+async function recoverRunningGraphs() {
+  const { existsSync, readdirSync, readFileSync } = await import("node:fs");
+  const { default: path } = await import("node:path");
+  const directory = path.join(root, "graphs");
+  if (!existsSync(directory)) return;
+  for (const entry of readdirSync(directory)) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const stored = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
+      if (stored?.status === "running" && stored?.nodes?.length > 0) {
+        void runGraph(stored.conversation_id, stored.run_id);
+      }
+    } catch {
+      // A malformed package state file is ignored; a new command can repair it.
+    }
+  }
+}
+
+setTimeout(() => void recoverRunningGraphs(), 100);

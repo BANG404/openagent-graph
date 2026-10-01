@@ -1,25 +1,32 @@
 # OpenAgent Graph
 
-The standard Agent Plugin package for OpenAgent Graph Mode. The package carries
-the public plugin identity, its Skill, Flow step, MCP server, package-owned
-state, and the GitHub subscription source. The trusted OpenAgent Runtime
-supplies only the generic Flow loop, conversations, checkpoints, cancellation,
-and the plugin host bridge. Graph persistence, parallel node scheduling,
-`/graph` prompts, and graph tool semantics live here.
+The standard Agent Plugin package for dependency aware Graph execution. The
+package owns the graph schema, reducer, persistence, child conversations,
+parallel scheduling, prompts, recovery, MCP tools, and progress projection.
+OpenAgent supplies the same generic capability bridge available to every
+plugin: conversations, branches, Agent submission and wake, roles, events,
+cancellation, permissions, and ordinary checkpoint storage.
 
-Install or update this package from its GitHub repository in OpenAgent. The
-package uses the portable Agent Plugins 1.0.0 format plus the
-`extensions.openagent.runtime` binding.
+The package uses the portable Agent Plugins 1.0.0 format. Its
+`extensions.openagent.runtime` value is update provenance only; it does not
+select a Graph implementation in the Runtime. The `graph` command is exposed as
+`/graph` through the generic package-id alias; `/graph:graph` remains the full
+namespaced route. `mcp.json` starts `bin/graph-mcp.mjs`, which persists Graph
+state under `PLUGIN_DATA/graphs/` and wakes child Agents through
+`agent.wake`.
 
-## Message policies
+## State and recovery
 
-This package declares none. The Runtime keeps the old
-`graph_bootstrap`, `graph_continuation`, `graph_node_bootstrap`, and
-`graph_node_continuation` entries only to read legacy checkpoints. New Graph
-flow messages use the generic plugin-flow tags and projection. A policy declared here would be namespaced to
-`plugin:graph:<tag>`, which belongs to messages this package's own automation
-would print; this package ships no automation, so it could never take effect and
-would only add a second entry to the plugin card's policy count.
+Each parent conversation has one package-owned Graph record. Nodes are validated
+as a DAG, marked started before their child conversation is created, and reduced
+serially as child Agent turns finish. A node stores its child conversation,
+branch, checkpoint, status, and result. The package resumes running records when
+its MCP server starts, and cancellation propagates through the generic
+conversation cancellation bridge.
+
+`plugin-flow-updated` is a transient display event. The Runtime carries the
+package's optional projection opaquely in checkpoints and never interprets node
+dependencies or Graph completion rules.
 
 ## Development
 
