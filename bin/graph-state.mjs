@@ -59,19 +59,13 @@ export function deleteGraph(root, conversationId, branchId = null) {
   if (existsSync(file)) unlinkSync(file);
 }
 
-export function newGraph(conversationId, branchIdOrObjective, objectiveOrNodes, maybeNodes = []) {
-  // Keep the old three-argument helper shape readable for package consumers
-  // while making branch ownership explicit for all new records.
-  const hasBranch = Array.isArray(objectiveOrNodes);
-  const branchId = hasBranch ? null : branchKey(branchIdOrObjective);
-  const objective = hasBranch ? branchIdOrObjective : objectiveOrNodes;
-  const nodes = hasBranch ? objectiveOrNodes : maybeNodes;
+export function newGraph(conversationId, branchId, objective, nodes) {
   const graph = {
     run_id: randomUUID(),
     conversation_id: String(conversationId),
-    branch_id: branchId,
+    branch_id: branchKey(branchId),
     objective: String(objective ?? "").trim(),
-    nodes: nodes.map((node) => ({
+    nodes: (nodes ?? []).map((node) => ({
       id: String(node.id).trim(),
       task: String(node.task).trim(),
       depends_on: Array.isArray(node.depends_on) ? node.depends_on.map(String) : [],

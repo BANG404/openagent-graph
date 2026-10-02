@@ -17,6 +17,23 @@ async function main() {
   const objective = String(input?.argument ?? "").trim();
   if (!conversationId || !objective) throw new Error("conversation_id and argument are required");
   const { branchId } = context({ _openagent: { conversation_id: conversationId, branch_id: input?.branch_id } });
+  const flow = {
+    kind: "plugin",
+    state: {
+      plugin_id: "graph",
+      flow_id: "plugin:graph:graph",
+      title: objective,
+      status: "running",
+      items: [],
+    },
+  };
+  if (branchId) {
+    await host("conversation.flow.set", {
+      conv_id: conversationId,
+      branch_id: branchId,
+      flow,
+    });
+  }
   await host("event.emit", {
     name: "plugin-flow-updated",
     payload: {
@@ -25,16 +42,7 @@ async function main() {
       flow_id: "plugin:graph:graph",
       status: "running",
       branch_id: branchId,
-      flow: {
-        kind: "plugin",
-        state: {
-          plugin_id: "graph",
-          flow_id: "plugin:graph:graph",
-          title: objective,
-          status: "running",
-          items: [],
-        },
-      },
+      flow,
     },
   });
   process.stdout.write([

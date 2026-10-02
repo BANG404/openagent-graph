@@ -123,6 +123,17 @@ function getGraph(args) {
 function emit(graph, type, payload = {}) {
   appendUpdate(graph, type, payload);
   writeGraph(root, graph);
+  const flow = {
+    kind: "plugin",
+    state: { plugin_id: "graph", flow_id: "plugin:graph:graph", ...projection(graph) },
+  };
+  if (graph.branch_id) {
+    void host("conversation.flow.set", {
+      conv_id: graph.conversation_id,
+      branch_id: graph.branch_id,
+      flow,
+    }).catch(() => {});
+  }
   void host("event.emit", {
     name: "plugin-flow-updated",
     payload: {
@@ -131,7 +142,7 @@ function emit(graph, type, payload = {}) {
       branch_id: graph.branch_id,
       flow_id: "plugin:graph:graph",
       status: graph.status,
-      flow: { kind: "plugin", state: { plugin_id: "graph", flow_id: "plugin:graph:graph", ...projection(graph) } },
+      flow,
     },
   }).catch(() => {});
 }

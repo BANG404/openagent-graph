@@ -15,6 +15,10 @@ namespaced route. `mcp.json` starts `bin/graph-mcp.mjs`, which persists Graph
 state under `PLUGIN_DATA/graphs/` and wakes child Agents through
 `agent.wake`.
 
+The package persists its complete display projection through the generic
+`conversation.flow.set` capability after each reducer advance; the graph files
+under `PLUGIN_DATA` remain authoritative.
+
 ## State and recovery
 
 Each parent conversation branch has one package-owned Graph record. Nodes are
@@ -36,6 +40,7 @@ checkout, pointing at this directory.
 
 ```bash
 bun <plugin-kit>/scripts/validate-plugin.mjs .
+bun test
 ```
 
 ## License

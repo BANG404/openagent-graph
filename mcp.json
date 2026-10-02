@@ -3,7 +3,8 @@
   "mcpServers": {
     "graph": {
       "type": "stdio",
-      "command": "./bin/graph-mcp.mjs"
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/bin/graph-mcp.mjs"]
     }
   }
 }
