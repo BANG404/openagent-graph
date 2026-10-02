@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { context, host } from "./graph-host.mjs";
+import { agent, conversation, event, requireConversationContext } from "./graph-host.mjs";
+import { flowProjection, nodePrompt, publishGraph } from "./lib/graph-bridge.mjs";
 import {
   appendUpdate,
   dataRoot,
@@ -107,8 +108,14 @@ function result(value) {
   return JSON.stringify(value);
 }
 
+function graphContext(args) {
+  const value = requireConversationContext(args);
+  if (!value.branchId) throw new Error("OpenAgent did not provide a branch context for Graph");
+  return value;
+}
+
 function getGraph(args) {
-  const { conversationId, branchId } = context(args);
+  const { conversationId, branchId } = graphContext(args);
   const graph = readGraph(root, conversationId, branchId);
   if (
     !graph ||
@@ -123,32 +130,11 @@ function getGraph(args) {
 async function emit(graph, type, payload = {}) {
   appendUpdate(graph, type, payload);
   writeGraph(root, graph);
-  const flow = {
-    kind: "plugin",
-    state: { plugin_id: "graph", flow_id: "plugin:graph:graph", ...projection(graph) },
-  };
-  if (graph.branch_id) {
-    await host("conversation.flow.set", {
-      conv_id: graph.conversation_id,
-      branch_id: graph.branch_id,
-      flow,
-    });
-  }
-  await host("event.emit", {
-    name: "plugin-flow-updated",
-    payload: {
-      plugin_id: "graph",
-      conv_id: graph.conversation_id,
-      branch_id: graph.branch_id,
-      flow_id: "plugin:graph:graph",
-      status: graph.status,
-      flow,
-    },
-  });
+  await publishGraph({ conversation, event }, graph).catch(() => {});
 }
 
 async function startGraph(args) {
-  const { conversationId, branchId } = context(args);
+  const { conversationId, branchId } = graphContext(args);
   const config = args?.graph;
   if (!config || !Array.isArray(config.nodes) || config.nodes.length === 0) throw new Error("graph.nodes must be a non-empty array");
   const objective = String(args?.objective ?? "").trim() || config.nodes.map((node) => String(node.task ?? "")).join("\n");
@@ -182,10 +168,10 @@ async function runNode(conversationId, branchId, runId, nodeId) {
   const node = initial.nodes.find((candidate) => candidate.id === nodeId);
   if (!node || node.status !== "running") return;
   const existingChild = currentChild(node);
-  const created = existingChild ?? await host("conversation.create", {
+  const created = existingChild ?? await conversation.create({
     title: `Graph node ${node.id}`,
     workspace: "",
-    parent_conv_id: conversationId,
+    parentConvId: conversationId,
   });
   await runMutation(async () => {
     const graph = readGraph(root, conversationId, branchId);
@@ -200,19 +186,14 @@ async function runNode(conversationId, branchId, runId, nodeId) {
   const graph = readGraph(root, conversationId, branchId);
   const current = graph?.run_id === runId ? graph.nodes.find((candidate) => candidate.id === nodeId) : null;
   if (!graph || !current || isTerminal(graph)) {
-    await host("conversation.cancel", { conv_id: created.conv_id }).catch(() => {});
+    await conversation.cancel(created.conv_id).catch(() => {});
     return;
   }
-  const detail = await host("conversation.state", {
-    conv_id: current.child_conv_id,
-    branch_id: current.child_branch_id,
-  });
+  const detail = await conversation.state({ convId: current.child_conv_id, branchId: current.child_branch_id });
   const taskMessageId = randomUUID();
   const assistantMessageId = randomUUID();
   if (!existingChild) {
-    await host("event.emit", {
-      name: "subagent-started",
-      payload: {
+    await event.emit("subagent-started", {
         plugin_id: "graph",
         parent_conv_id: conversationId,
         sub_conv_id: current.child_conv_id,
@@ -224,22 +205,13 @@ async function runNode(conversationId, branchId, runId, nodeId) {
         branch_id: current.child_branch_id,
         hidden_task: true,
         flow_kind: "graph-node",
-      },
     }).catch(() => {});
   }
   const dependency = dependencyResults(graph, current);
-  const prompt = [
-    "You are executing one node from an OpenAgent Graph.",
-    `Original objective: ${graph.objective}`,
-    `Node id: ${current.id}`,
-    `Node task: ${current.task}`,
-    dependency ? `Completed dependency results:\n${dependency}` : "This node has no dependency results.",
-    "Execute only this node and finish with a concise result.",
-  ].join("\n\n");
-  const response = await host("agent.wake", {
-    request: {
-      conv_id: current.child_conv_id,
-      branch_id: current.child_branch_id,
+  const prompt = nodePrompt(graph, current, dependency);
+  const response = await agent.wake({
+      convId: current.child_conv_id,
+      branchId: current.child_branch_id,
       text: prompt,
       // The generic bridge resolves the selected child branch head just before
       // submission, so a queued wake cannot reuse a stale checkpoint.
@@ -250,18 +222,8 @@ async function runNode(conversationId, branchId, runId, nodeId) {
       user_message_id: null,
       assistant_message_id: assistantMessageId,
       hidden: true,
-      flow: {
-        kind: "plugin",
-        state: {
-          plugin_id: "graph",
-          flow_id: "plugin:graph:graph",
-          title: graph.objective,
-          status: graph.status,
-          items: projection(graph).items,
-        },
-      },
-    },
-  });
+      flow: flowProjection(graph),
+    }, { wait: true });
   const messages = response?.state?.messages ?? [];
   const assistant = [...messages].reverse().find((message) => message.role === "assistant");
   await runMutation(async () => {
@@ -370,6 +332,41 @@ async function runGraph(conversationId, branchId, runId) {
   }
 }
 
+/** Reconcile a node whose MCP process stopped while its child was running. */
+async function recoverNode(node) {
+  if (node.status !== "running") return false;
+  if (node.child_conv_id && node.child_branch_id) {
+    try {
+      const detail = await conversation.state({
+        convId: node.child_conv_id,
+        branchId: node.child_branch_id,
+      });
+      if (detail?.phase === "final_completed") {
+        const messages = Array.isArray(detail.messages) ? detail.messages : [];
+        const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+        const result = String(assistant?.text ?? "").trim();
+        if (result) {
+          node.result = result;
+          node.child_checkpoint_id = detail.checkpoint_id ?? null;
+          node.status = "completed";
+          node.started = true;
+          return true;
+        }
+      }
+    } catch {
+      // A missing child is restarted below from the package-owned graph state.
+    }
+    await conversation.cancel(node.child_conv_id).catch(() => {});
+  }
+  node.status = "pending";
+  node.started = false;
+  node.child_conv_id = null;
+  node.child_branch_id = null;
+  node.child_checkpoint_id = null;
+  node.result = null;
+  return true;
+}
+
 async function updateGraph(args) {
   return runMutation(async () => {
   const { graph } = getGraph(args);
@@ -428,7 +425,7 @@ async function callTool(name, args) {
       for (const node of graph.nodes) if (node.status === "pending" || node.status === "running") node.status = "cancelled";
       writeGraph(root, graph);
       for (const node of graph.nodes) {
-        if (node.child_conv_id) await host("conversation.cancel", { conv_id: node.child_conv_id }).catch(() => {});
+        if (node.child_conv_id) await conversation.cancel(node.child_conv_id).catch(() => {});
       }
       await emit(graph, "cancelled");
       return result({ run_id: graph.run_id, status: graph.status, graph: projection(graph) });
@@ -497,8 +494,24 @@ async function recoverRunningGraphs() {
     if (!entry.endsWith(".json")) continue;
     try {
       const stored = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
-      if (stored?.status === "running" && stored?.nodes?.length > 0) {
-        void runGraph(stored.conversation_id, stored.branch_id ?? null, stored.run_id);
+      if (stored?.status !== "running" || !stored?.conversation_id) continue;
+      const graph = readGraph(root, stored.conversation_id, stored.branch_id ?? null);
+      if (!graph || graph.run_id !== stored.run_id || isTerminal(graph)) continue;
+      const hadRunningNode = graph.nodes.some((node) => node.status === "running");
+      if (hadRunningNode) {
+        await runMutation(async () => {
+          const latest = readGraph(root, graph.conversation_id, graph.branch_id);
+          if (!latest || latest.run_id !== graph.run_id || isTerminal(latest)) return;
+          for (const node of latest.nodes) await recoverNode(node);
+          writeGraph(root, latest);
+          await emit(latest, "recovered");
+        }).catch((error) => {
+          process.stderr.write(`graph recovery: ${error.message}\n`);
+        });
+      }
+      const latest = readGraph(root, graph.conversation_id, graph.branch_id);
+      if (latest && !isTerminal(latest)) {
+        void runGraph(latest.conversation_id, latest.branch_id, latest.run_id);
       }
     } catch {
       // A malformed package state file is ignored; a new command can repair it.

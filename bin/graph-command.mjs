@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
-import { context, host } from "./graph-host.mjs";
+import { context, event, conversation } from "./graph-host.mjs";
+import { bootstrapPrompt } from "./lib/graph-bridge.mjs";
 
 function request() {
   try {
@@ -17,44 +18,21 @@ async function main() {
   const objective = String(input?.argument ?? "").trim();
   if (!conversationId || !objective) throw new Error("conversation_id and argument are required");
   const { branchId } = context({ _openagent: { conversation_id: conversationId, branch_id: input?.branch_id } });
-  const flow = {
-    kind: "plugin",
-    state: {
-      plugin_id: "graph",
-      flow_id: "plugin:graph:graph",
-      title: objective,
-      status: "running",
-      items: [],
-    },
-  };
+  const flow = { kind: "plugin", state: { plugin_id: "graph", flow_id: "plugin:graph:graph", title: objective, status: "running", items: [] } };
   if (branchId) {
-    await host("conversation.flow.set", {
+    await conversation.setFlow(conversationId, branchId, flow);
+  }
+  if (branchId) {
+    await event.emit("plugin-flow-updated", {
+      plugin_id: "graph",
       conv_id: conversationId,
+      flow_id: "plugin:graph:graph",
+      status: "running",
       branch_id: branchId,
       flow,
     });
   }
-  await host("event.emit", {
-    name: "plugin-flow-updated",
-    payload: {
-      plugin_id: "graph",
-      conv_id: conversationId,
-      flow_id: "plugin:graph:graph",
-      status: "running",
-      branch_id: branchId,
-      flow,
-    },
-  });
-  process.stdout.write([
-    "You are running the OpenAgent Graph plugin.",
-    "",
-    `Objective:\n${objective}`,
-    "",
-    "Design a dependency-aware set of nodes and call create_goal_graph with the complete graph.",
-    "The Graph plugin creates child conversations and wakes their Agents through the generic host bridge.",
-    "After starting it, use graph_read with the returned run_id and cursor to follow progress.",
-    "Do not create a fallback or summarizer node.",
-  ].join("\n"));
+  process.stdout.write(bootstrapPrompt(objective));
 }
 
 try {

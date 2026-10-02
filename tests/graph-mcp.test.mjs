@@ -132,7 +132,7 @@ describe("Graph MCP package boundary", () => {
       expect(response.result.isError).not.toBe(true);
       await waitFor(() => host.requests.some((request) => request.operation === "agent.wake"));
       const wake = host.requests.find((request) => request.operation === "agent.wake");
-      expect(wake.args.request.branch_id).toBe("child-branch-1");
+      expect((wake.args.request ?? wake.args).branch_id).toBe("child-branch-1");
       expect(host.requests.some((request) => request.operation === "conversation.flow.set")).toBe(true);
       expect(host.requests.some((request) => request.operation === "conversation.create")).toBe(true);
       const firstProjection = host.requests.findIndex(
