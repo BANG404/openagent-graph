@@ -120,7 +120,7 @@ function getGraph(args) {
   return { graph, conversationId, branchId };
 }
 
-function emit(graph, type, payload = {}) {
+async function emit(graph, type, payload = {}) {
   appendUpdate(graph, type, payload);
   writeGraph(root, graph);
   const flow = {
@@ -128,13 +128,13 @@ function emit(graph, type, payload = {}) {
     state: { plugin_id: "graph", flow_id: "plugin:graph:graph", ...projection(graph) },
   };
   if (graph.branch_id) {
-    void host("conversation.flow.set", {
+    await host("conversation.flow.set", {
       conv_id: graph.conversation_id,
       branch_id: graph.branch_id,
       flow,
-    }).catch(() => {});
+    });
   }
-  void host("event.emit", {
+  await host("event.emit", {
     name: "plugin-flow-updated",
     payload: {
       plugin_id: "graph",
@@ -144,7 +144,7 @@ function emit(graph, type, payload = {}) {
       status: graph.status,
       flow,
     },
-  }).catch(() => {});
+  });
 }
 
 async function startGraph(args) {
@@ -152,10 +152,10 @@ async function startGraph(args) {
   const config = args?.graph;
   if (!config || !Array.isArray(config.nodes) || config.nodes.length === 0) throw new Error("graph.nodes must be a non-empty array");
   const objective = String(args?.objective ?? "").trim() || config.nodes.map((node) => String(node.task ?? "")).join("\n");
-  const graph = await runMutation(() => {
+  const graph = await runMutation(async () => {
     const created = newGraph(conversationId, branchId, objective, config.nodes);
     writeGraph(root, created);
-    emit(created, "created");
+    await emit(created, "created");
     return created;
   });
   void runGraph(graph.conversation_id, graph.branch_id, graph.run_id);
@@ -187,7 +187,7 @@ async function runNode(conversationId, branchId, runId, nodeId) {
     workspace: "",
     parent_conv_id: conversationId,
   });
-  await runMutation(() => {
+  await runMutation(async () => {
     const graph = readGraph(root, conversationId, branchId);
     if (!graph || graph.run_id !== runId || isTerminal(graph)) return;
     const current = graph.nodes.find((candidate) => candidate.id === nodeId);
@@ -195,7 +195,7 @@ async function runNode(conversationId, branchId, runId, nodeId) {
     current.child_conv_id = created.conv_id;
     current.child_branch_id = created.branch_id;
     writeGraph(root, graph);
-    emit(graph, "node-started", { node_id: nodeId });
+    await emit(graph, "node-started", { node_id: nodeId });
   });
   const graph = readGraph(root, conversationId, branchId);
   const current = graph?.run_id === runId ? graph.nodes.find((candidate) => candidate.id === nodeId) : null;
@@ -264,7 +264,7 @@ async function runNode(conversationId, branchId, runId, nodeId) {
   });
   const messages = response?.state?.messages ?? [];
   const assistant = [...messages].reverse().find((message) => message.role === "assistant");
-  await runMutation(() => {
+  await runMutation(async () => {
     const latest = readGraph(root, conversationId, branchId);
     if (!latest || latest.run_id !== runId || isTerminal(latest)) return;
     const completed = latest.nodes.find((candidate) => candidate.id === nodeId);
@@ -274,7 +274,7 @@ async function runNode(conversationId, branchId, runId, nodeId) {
     completed.status = completed.result ? "completed" : "failed";
     if (!completed.result) latest.status = "failed";
     writeGraph(root, latest);
-    emit(latest, "node-finished", { node_id: nodeId });
+    await emit(latest, "node-finished", { node_id: nodeId });
   });
 }
 
@@ -289,7 +289,7 @@ async function runGraph(conversationId, branchId, runId) {
       const running = graph.nodes.filter((node) => node.status === "running");
       if (running.length > 0) {
         await Promise.all(running.map((node) => runNode(conversationId, branchId, runId, node.id).catch((error) =>
-          runMutation(() => {
+          runMutation(async () => {
             const latest = readGraph(root, conversationId, branchId);
             if (!latest || latest.run_id !== runId || isTerminal(latest)) return;
             const failed = latest.nodes.find((candidate) => candidate.id === node.id);
@@ -298,14 +298,14 @@ async function runGraph(conversationId, branchId, runId) {
             failed.result = String(error?.message ?? error);
             latest.status = "failed";
             writeGraph(root, latest);
-            emit(latest, "node-failed", { node_id: node.id });
+            await emit(latest, "node-failed", { node_id: node.id });
           }),
         )));
         const resumed = readGraph(root, conversationId, branchId);
         if (!resumed || resumed.run_id !== runId || isTerminal(resumed)) return;
         reconcile(resumed);
         writeGraph(root, resumed);
-        emit(resumed, "advance");
+        await emit(resumed, "advance");
         continue;
       }
       const runnable = graph.nodes.filter((node) =>
@@ -314,7 +314,7 @@ async function runGraph(conversationId, branchId, runId) {
         ),
       );
       if (runnable.length === 0) {
-        await runMutation(() => {
+        await runMutation(async () => {
           const latest = readGraph(root, conversationId, branchId);
           if (!latest || latest.run_id !== runId || isTerminal(latest)) return;
           if (latest.nodes.some((node) => node.status === "pending" || node.status === "running")) {
@@ -324,12 +324,12 @@ async function runGraph(conversationId, branchId, runId) {
             reconcile(latest);
           }
           writeGraph(root, latest);
-          emit(latest, "terminal");
+          await emit(latest, "terminal");
         });
         return;
       }
       const nodeIds = runnable.map((node) => node.id);
-      const started = await runMutation(() => {
+      const started = await runMutation(async () => {
         const latest = readGraph(root, conversationId, branchId);
         if (!latest || latest.run_id !== runId || isTerminal(latest)) return false;
         for (const node of latest.nodes) {
@@ -338,12 +338,12 @@ async function runGraph(conversationId, branchId, runId) {
           node.status = "running";
         }
         writeGraph(root, latest);
-        emit(latest, "nodes-started", { node_ids: nodeIds });
+        await emit(latest, "nodes-started", { node_ids: nodeIds });
         return true;
       });
       if (!started) return;
       await Promise.all(nodeIds.map((nodeId) => runNode(conversationId, branchId, runId, nodeId).catch((error) =>
-        runMutation(() => {
+        runMutation(async () => {
           const latest = readGraph(root, conversationId, branchId);
           if (!latest || latest.run_id !== runId || isTerminal(latest)) return;
           const failed = latest.nodes.find((node) => node.id === nodeId);
@@ -352,15 +352,15 @@ async function runGraph(conversationId, branchId, runId) {
           failed.result = String(error?.message ?? error);
           latest.status = "failed";
           writeGraph(root, latest);
-          emit(latest, "node-failed", { node_id: nodeId });
+          await emit(latest, "node-failed", { node_id: nodeId });
         }),
       )));
-      const advanced = await runMutation(() => {
+      const advanced = await runMutation(async () => {
         const latest = readGraph(root, conversationId, branchId);
         if (!latest || latest.run_id !== runId || isTerminal(latest)) return latest;
         reconcile(latest);
         writeGraph(root, latest);
-        emit(latest, "advance");
+        await emit(latest, "advance");
         return latest;
       });
       if (!advanced || isTerminal(advanced)) return;
@@ -395,7 +395,7 @@ async function updateGraph(args) {
   if (typeof args?.summary === "string" && args.summary.trim()) graph.summary = args.summary.trim();
   graph.status = "running";
   writeGraph(root, graph);
-  emit(graph, "updated");
+  await emit(graph, "updated");
   void runGraph(graph.conversation_id, graph.branch_id, graph.run_id);
   return { run_id: graph.run_id, status: graph.status, graph: projection(graph) };
   });
@@ -430,7 +430,7 @@ async function callTool(name, args) {
       for (const node of graph.nodes) {
         if (node.child_conv_id) await host("conversation.cancel", { conv_id: node.child_conv_id }).catch(() => {});
       }
-      emit(graph, "cancelled");
+      await emit(graph, "cancelled");
       return result({ run_id: graph.run_id, status: graph.status, graph: projection(graph) });
     });
   }

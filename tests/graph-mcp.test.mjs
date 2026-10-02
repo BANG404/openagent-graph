@@ -135,6 +135,15 @@ describe("Graph MCP package boundary", () => {
       expect(wake.args.request.branch_id).toBe("child-branch-1");
       expect(host.requests.some((request) => request.operation === "conversation.flow.set")).toBe(true);
       expect(host.requests.some((request) => request.operation === "conversation.create")).toBe(true);
+      const firstProjection = host.requests.findIndex(
+        (request) => request.operation === "conversation.flow.set",
+      );
+      const firstProjectionEvent = host.requests.findIndex(
+        (request) => request.operation === "event.emit" &&
+          request.args.name === "plugin-flow-updated",
+      );
+      expect(firstProjection).toBeGreaterThanOrEqual(0);
+      expect(firstProjectionEvent).toBeGreaterThan(firstProjection);
     } finally {
       await mcp.stop();
       await host.close();

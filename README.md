@@ -17,7 +17,9 @@ state under `PLUGIN_DATA/graphs/` and wakes child Agents through
 
 The package persists its complete display projection through the generic
 `conversation.flow.set` capability after each reducer advance; the graph files
-under `PLUGIN_DATA` remain authoritative.
+under `PLUGIN_DATA` remain authoritative. The `plugin:graph:graph` value in
+that projection is only the package's own flow identifier. Runtime does not
+register, inspect, or execute a Graph implementation based on that string.
 
 ## State and recovery
 
