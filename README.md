@@ -43,6 +43,22 @@ the generic conversation cancellation bridge.
 package's optional projection opaquely in checkpoints and never interprets node
 dependencies or Graph completion rules.
 
+The parent and every recorded child branch display the same authoritative Graph
+projection. After every state transition, the package persists it to those exact
+branches before emitting their display events; a missing child does not prevent
+updates to the other branches. Historical checkpoints and unrelated child
+branches are not rewritten. On MCP restart, terminal records also republish their
+projection to repair older child snapshots without waking any Agent.
+
+Only a child checkpoint with phase `final_completed` supplies a successful node
+result. An `interrupted` checkpoint may contain planning text or an approval
+request: the node remains running and its dependents wait until that same child
+branch resumes. Recovery retains interrupted or in-progress children instead of
+cancelling and replacing them. Failed or cancelled child turns fail the Graph;
+explicit Graph cancellation stops polling and cancels its children.
+New child conversations use their parent's workspace, even when another desktop
+conversation becomes active during scheduling.
+
 ## Development
 
 Stable GitHub releases include an installable ZIP with `plugin.json` at the

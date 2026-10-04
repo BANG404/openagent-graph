@@ -3,11 +3,12 @@ import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { newGraph, readGraph, writeGraph } from "../bin/graph-state.mjs";
 
 const packageRoot = path.resolve(import.meta.dirname, "..");
 const mcpScript = path.join(packageRoot, "bin", "graph-mcp.mjs");
 
-async function startHost() {
+async function startHost({ childState, wakeState } = {}) {
   const requests = [];
   let childNumber = 0;
   const server = createServer(async (request, response) => {
@@ -20,11 +21,14 @@ async function startHost() {
       childNumber += 1;
       result = { conv_id: `child-${childNumber}`, branch_id: `child-branch-${childNumber}` };
     } else if (parsed.operation === "conversation.state") {
-      result = { branch_id: parsed.args.branch_id ?? null, workspace: "" };
+      result = parsed.args.conv_id === "parent"
+        ? { branch_id: parsed.args.branch_id ?? null, workspace: "parent-workspace" }
+        : childState?.() ?? { branch_id: parsed.args.branch_id ?? null, workspace: "" };
     } else if (parsed.operation === "agent.wake") {
       result = {
         accepted: true,
-        state: {
+        state: wakeState ?? {
+          phase: "final_completed",
           checkpoint_id: "child-checkpoint",
           messages: [{ role: "assistant", text: "node complete" }],
         },
@@ -135,6 +139,7 @@ describe("Graph MCP package boundary", () => {
       expect((wake.args.request ?? wake.args).branch_id).toBe("child-branch-1");
       expect(host.requests.some((request) => request.operation === "conversation.flow.set")).toBe(true);
       expect(host.requests.some((request) => request.operation === "conversation.create")).toBe(true);
+      expect(host.requests.find((request) => request.operation === "conversation.create").args.workspace).toBe("parent-workspace");
       const firstProjection = host.requests.findIndex(
         (request) => request.operation === "conversation.flow.set",
       );
@@ -144,6 +149,135 @@ describe("Graph MCP package boundary", () => {
       );
       expect(firstProjection).toBeGreaterThanOrEqual(0);
       expect(firstProjectionEvent).toBeGreaterThan(firstProjection);
+      await waitFor(() => host.requests.some((request) => request.operation === "conversation.flow.set" &&
+        request.args.conv_id === "child-1" && request.args.flow.state.status === "completed"));
+      const finalProjections = host.requests.filter((request) => request.operation === "conversation.flow.set" &&
+        request.args.flow.state.status === "completed");
+      expect([...new Set(finalProjections.map((request) => request.args.conv_id))].sort()).toEqual(["child-1", "parent"]);
+      for (const request of finalProjections) expect(request.args.flow).toEqual(finalProjections[0].args.flow);
+      expect(finalProjections[0].args.flow.state.items[0].status).toBe("completed");
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["final_completed", "final_failed", "final_cancelled"])(
+    "keeps an interrupted child pending until %s, then publishes its actual outcome",
+    async (phase) => {
+      const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-interrupted-"));
+      const interrupted = { phase: "interrupted", checkpoint_id: "approval", messages: [{ role: "assistant", text: "I will research" }] };
+      let detail = interrupted;
+      const host = await startHost({ wakeState: interrupted, childState: () => detail });
+      const mcp = await startMcp(dataRoot, host.url);
+      const context = { conversation_id: "parent", branch_id: "parent-branch" };
+      try {
+        const created = await mcp.callTool("create_goal_graph", {
+          _openagent: context, objective: "Wait for the result",
+          graph: { nodes: [{ id: "one", task: "Research" }, { id: "two", task: "Use the result", depends_on: ["one"] }] },
+        });
+        const run = JSON.parse(created.result.content[0].text);
+        await waitFor(() => host.requests.some((request) => request.operation === "agent.wake"));
+        const pending = await mcp.callTool("graph_read", { _openagent: context, run_id: run.run_id, wait_secs: 0 });
+        expect(JSON.parse(pending.result.content[0].text).graph.items.map((item) => item.status)).toEqual(["running", "pending"]);
+        detail = { phase, checkpoint_id: "finished", messages: [{ role: "assistant", text: "Actual research result" }] };
+        const expected = phase === "final_completed" ? "completed" : "failed";
+        await waitFor(() => host.requests.some((request) => request.operation === "conversation.flow.set" &&
+          request.args.conv_id === "child-1" && request.args.flow.state.status === expected));
+        const terminal = host.requests.filter((request) => request.operation === "conversation.flow.set" &&
+          request.args.flow.state.status === expected);
+        expect(terminal.find((request) => request.args.conv_id === "parent").args.flow)
+          .toEqual(terminal.find((request) => request.args.conv_id === "child-1").args.flow);
+        if (phase === "final_completed") expect(terminal[0].args.flow.state.items[0].detail).toBe("Actual research result");
+        else expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(1);
+      } finally {
+        await mcp.stop();
+        await host.close();
+        rmSync(dataRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("cancellation updates the waiting child and never schedules a dependent node", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-cancel-"));
+    const interrupted = { phase: "interrupted", checkpoint_id: "approval", messages: [] };
+    const host = await startHost({ wakeState: interrupted, childState: () => interrupted });
+    const mcp = await startMcp(dataRoot, host.url);
+    const context = { conversation_id: "parent", branch_id: "parent-branch" };
+    try {
+      const response = await mcp.callTool("create_goal_graph", {
+        _openagent: context, graph: { nodes: [{ id: "one", task: "Work" }] },
+      });
+      const { run_id } = JSON.parse(response.result.content[0].text);
+      await waitFor(() => host.requests.some((request) => request.operation === "agent.wake"));
+      await mcp.callTool("cancel_goal_graph", { _openagent: context, run_id });
+      expect(host.requests.some((request) => request.operation === "conversation.flow.set" &&
+        request.args.conv_id === "child-1" && request.args.flow.state.status === "cancelled")).toBe(true);
+      expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(1);
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("restart republishes terminal state to existing children without waking them", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-recover-"));
+    const graph = newGraph("parent", "parent-branch", "Done", [{ id: "one", task: "Work" }]);
+    graph.status = "completed";
+    Object.assign(graph.nodes[0], { status: "completed", child_conv_id: "child", child_branch_id: "child-branch" });
+    writeGraph(dataRoot, graph);
+    const host = await startHost();
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      await waitFor(() => host.requests.some((request) => request.operation === "conversation.flow.set" && request.args.conv_id === "child"));
+      expect(host.requests.filter((request) => request.operation === "agent.wake")).toEqual([]);
+      expect(host.requests.find((request) => request.operation === "conversation.flow.set" && request.args.conv_id === "child").args.flow.state.status).toBe("completed");
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("restart keeps an interrupted child and collects its resumed result without a duplicate wake", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-resume-"));
+    const graph = newGraph("parent", "parent-branch", "Resume", [{ id: "one", task: "Work" }]);
+    Object.assign(graph.nodes[0], { status: "running", started: true, child_conv_id: "existing-child", child_branch_id: "existing-branch" });
+    writeGraph(dataRoot, graph);
+    let detail = { phase: "interrupted", checkpoint_id: "approval", messages: [{ role: "assistant", text: "Planning" }] };
+    const host = await startHost({ childState: () => detail });
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      await waitFor(() => host.requests.filter((request) => request.operation === "conversation.state").length >= 3);
+      expect(host.requests.filter((request) => ["conversation.cancel", "conversation.create", "agent.wake"].includes(request.operation))).toEqual([]);
+      detail = { phase: "final_completed", checkpoint_id: "finished", messages: [{ role: "assistant", text: "Resumed result" }] };
+      await waitFor(() => host.requests.some((request) => request.operation === "conversation.flow.set" &&
+        request.args.conv_id === "existing-child" && request.args.flow.state.status === "completed"));
+      const flow = host.requests.find((request) => request.operation === "conversation.flow.set" && request.args.flow.state.status === "completed").args.flow;
+      expect(flow.state.items[0].detail).toBe("Resumed result");
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["final_failed", "final_cancelled"])("restart preserves a child %s outcome without retrying it", async (phase) => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-recover-failed-"));
+    const graph = newGraph("parent", "parent-branch", "Recover failure", [{ id: "one", task: "Work" }]);
+    Object.assign(graph.nodes[0], { status: "running", started: true, child_conv_id: "existing-child", child_branch_id: "existing-branch" });
+    writeGraph(dataRoot, graph);
+    const host = await startHost({ childState: () => ({ phase, checkpoint_id: "failed-checkpoint", messages: [] }) });
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      await waitFor(() => host.requests.some((request) => request.operation === "conversation.flow.set" &&
+        request.args.conv_id === "existing-child" && request.args.flow.state.status === "failed"));
+      expect(host.requests.filter((request) => ["conversation.create", "conversation.cancel", "agent.wake"].includes(request.operation))).toEqual([]);
+      const saved = readGraph(dataRoot, graph.conversation_id, graph.branch_id);
+      expect(saved.nodes[0].child_checkpoint_id).toBe("failed-checkpoint");
+      expect(saved.nodes[0].result).toContain(phase);
     } finally {
       await mcp.stop();
       await host.close();

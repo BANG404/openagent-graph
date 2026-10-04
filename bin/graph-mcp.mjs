@@ -162,15 +162,31 @@ function currentChild(node) {
     : null;
 }
 
+async function waitForChild(conversationId, branchId, runId, node, detail) {
+  while (detail?.phase !== "final_completed") {
+    const graph = readGraph(root, conversationId, branchId);
+    if (!graph || graph.run_id !== runId || isTerminal(graph)) return null;
+    if (detail?.phase === "final_failed" || detail?.phase === "final_cancelled") {
+      throw new Error(`Graph node '${node.id}' ended with ${detail.phase}`);
+    }
+    // An interrupted turn can contain planning text and pending approvals.
+    // It is not a completed result; wait for the same child branch to resume.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    detail = await conversation.state({ convId: node.child_conv_id, branchId: node.child_branch_id });
+  }
+  return detail;
+}
+
 async function runNode(conversationId, branchId, runId, nodeId) {
   const initial = readGraph(root, conversationId, branchId);
   if (!initial || initial.run_id !== runId || isTerminal(initial)) return;
   const node = initial.nodes.find((candidate) => candidate.id === nodeId);
   if (!node || node.status !== "running") return;
   const existingChild = currentChild(node);
+  const parent = existingChild ? null : await conversation.state({ convId: conversationId, branchId });
   const created = existingChild ?? await conversation.create({
     title: `Graph node ${node.id}`,
-    workspace: "",
+    workspace: String(parent?.workspace ?? ""),
     parentConvId: conversationId,
   });
   await runMutation(async () => {
@@ -209,7 +225,9 @@ async function runNode(conversationId, branchId, runId, nodeId) {
   }
   const dependency = dependencyResults(graph, current);
   const prompt = nodePrompt(graph, current, dependency);
-  const response = await agent.wake({
+  const response = existingChild && detail?.checkpoint_id
+    ? { state: detail }
+    : await agent.wake({
       convId: current.child_conv_id,
       branchId: current.child_branch_id,
       text: prompt,
@@ -224,7 +242,9 @@ async function runNode(conversationId, branchId, runId, nodeId) {
       hidden: true,
       flow: flowProjection(graph),
     }, { wait: true });
-  const messages = response?.state?.messages ?? [];
+  const finished = await waitForChild(conversationId, branchId, runId, current, response?.state);
+  if (!finished) return;
+  const messages = finished.messages ?? [];
   const assistant = [...messages].reverse().find((message) => message.role === "assistant");
   await runMutation(async () => {
     const latest = readGraph(root, conversationId, branchId);
@@ -232,7 +252,7 @@ async function runNode(conversationId, branchId, runId, nodeId) {
     const completed = latest.nodes.find((candidate) => candidate.id === nodeId);
     if (!completed || completed.status !== "running") return;
     completed.result = String(assistant?.text ?? "").trim();
-    completed.child_checkpoint_id = response?.state?.checkpoint_id ?? null;
+    completed.child_checkpoint_id = finished.checkpoint_id ?? null;
     completed.status = completed.result ? "completed" : "failed";
     if (!completed.result) latest.status = "failed";
     writeGraph(root, latest);
@@ -341,6 +361,13 @@ async function recoverNode(node) {
         convId: node.child_conv_id,
         branchId: node.child_branch_id,
       });
+      if (detail?.phase === "before_completion" || detail?.phase === "interrupted") return false;
+      if (detail?.phase === "final_failed" || detail?.phase === "final_cancelled") {
+        node.status = "failed";
+        node.result = `Graph node '${node.id}' ended with ${detail.phase}`;
+        node.child_checkpoint_id = detail.checkpoint_id ?? null;
+        return true;
+      }
       if (detail?.phase === "final_completed") {
         const messages = Array.isArray(detail.messages) ? detail.messages : [];
         const assistant = [...messages].reverse().find((message) => message.role === "assistant");
@@ -494,15 +521,21 @@ async function recoverRunningGraphs() {
     if (!entry.endsWith(".json")) continue;
     try {
       const stored = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
-      if (stored?.status !== "running" || !stored?.conversation_id) continue;
+      if (!stored?.conversation_id) continue;
       const graph = readGraph(root, stored.conversation_id, stored.branch_id ?? null);
-      if (!graph || graph.run_id !== stored.run_id || isTerminal(graph)) continue;
+      if (!graph || graph.run_id !== stored.run_id) continue;
+      if (activeRuns.has(`${graph.conversation_id}:${graph.branch_id ?? ""}:${graph.run_id}`)) continue;
+      if (isTerminal(graph)) {
+        await publishGraph({ conversation, event }, graph).catch(() => {});
+        continue;
+      }
       const hadRunningNode = graph.nodes.some((node) => node.status === "running");
       if (hadRunningNode) {
         await runMutation(async () => {
           const latest = readGraph(root, graph.conversation_id, graph.branch_id);
           if (!latest || latest.run_id !== graph.run_id || isTerminal(latest)) return;
           for (const node of latest.nodes) await recoverNode(node);
+          if (latest.nodes.some((node) => node.status === "failed")) latest.status = "failed";
           writeGraph(root, latest);
           await emit(latest, "recovered");
         }).catch((error) => {

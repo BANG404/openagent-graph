@@ -17,17 +17,27 @@ export function flowProjection(graph) {
 /** Persist Graph's opaque projection using only generic package capabilities. */
 export async function publishGraph(host, graph) {
   const flow = flowProjection(graph);
-  if (graph.branch_id) {
-    await host.conversation.setFlow(graph.conversation_id, graph.branch_id, flow);
+  const targets = new Map();
+  const add = (conversationId, branchId) => {
+    if (conversationId && branchId) targets.set(`${conversationId}\u0000${branchId}`, [conversationId, branchId]);
+  };
+  add(graph.conversation_id, graph.branch_id);
+  for (const node of graph.nodes) add(node.child_conv_id, node.child_branch_id);
+  // A deleted child or a busy sibling branch must not prevent the other
+  // surfaces from receiving the authoritative package projection.
+  const results = await Promise.allSettled([...targets.values()].map(async ([conversationId, branchId]) => {
+    await host.conversation.setFlow(conversationId, branchId, flow);
     await host.event.emit("plugin-flow-updated", {
       plugin_id: "graph",
-      conv_id: graph.conversation_id,
-      branch_id: graph.branch_id,
+      conv_id: conversationId,
+      branch_id: branchId,
       flow_id: FLOW_ID,
       status: graph.status,
       flow,
     });
-  }
+  }));
+  const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (errors.length) throw new AggregateError(errors, "Graph projection publication failed");
 }
 
 export function bootstrapPrompt(objective) {
