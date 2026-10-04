@@ -45,6 +45,10 @@ dependencies or Graph completion rules.
 
 ## Development
 
+Stable GitHub releases include an installable ZIP with `plugin.json` at the
+archive root. OpenAgent verifies the release asset's SHA-256 digest before
+offering an explicit update; installed Graph data is preserved during activation.
+
 Validate it with the validator from an
 [OpenAgent Plugin Kit](https://github.com/BANG404/openagent-plugin-kit)
 checkout, pointing at this directory.
