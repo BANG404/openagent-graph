@@ -15,6 +15,15 @@ namespaced route. `mcp.json` starts `bin/graph-mcp.mjs`, which persists Graph
 state under `PLUGIN_DATA/graphs/` and wakes child Agents through
 `agent.wake`.
 
+The slash command only supplies the planning/execution prompt. It does not
+write package state or publish an empty running projection. A Graph starts
+when the Agent successfully calls `create_goal_graph`; that tool persists the
+DAG and publishes its first projection before scheduling nodes. If a model
+returns only a plan without calling the tool, no run is created and an earlier
+branch projection remains intact. The bootstrap prompt requires same-turn
+creation and progress reads through the terminal outcome, but a prompt cannot
+guarantee that a model will call tools.
+
 The package persists its complete display projection through the generic
 `conversation.flow.set` capability after each reducer advance; the graph files
 under `PLUGIN_DATA` remain authoritative. The `plugin:graph:graph` value in
