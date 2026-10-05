@@ -1,13 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "graph",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Dependency graph execution through OpenAgent checkpoints.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-graph",
   "keywords": ["openagent", "graph", "goal", "checkpoint"],
   "extensions": {
     "openagent": {
+      "mcp_tool_mode": "direct",
       "capabilities": ["command", "mcp"],
       "commands": [
         {
@@ -51,7 +52,7 @@
             "notice.unexpected": "Graph operation failed ({code})"
           },
           "zh": {
-            "display_name": "Graph",
+            "display_name": "任务图",
             "description": "通过 OpenAgent 检查点执行依赖关系图任务。",
             "commands.graph.label": "依赖图",
             "commands.graph.description": "执行具有依赖关系的图节点。",
