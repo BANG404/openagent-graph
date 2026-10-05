@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { agent, conversation, event, requireConversationContext } from "./graph-host.mjs";
+import { agent, conversation, event, locale as hostLocale, requireConversationContext } from "./graph-host.mjs";
 import { flowProjection, nodePrompt, publishGraph } from "./lib/graph-bridge.mjs";
 import {
   appendUpdate,
@@ -15,6 +15,7 @@ import {
   validateGraph,
   writeGraph,
 } from "./graph-state.mjs";
+import { defaultLocale, errorNotice, noticeText, requestLocale } from "./i18n.mjs";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const root = dataRoot();
@@ -471,6 +472,18 @@ async function callTool(name, args) {
 }
 
 function send(message) { process.stdout.write(`${JSON.stringify(message)}\n`); }
+function methodNotFound(id, method) {
+  const respond = (locale) => send({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32601, message: noticeText("notice.methodMissing", { method }, locale) },
+  });
+  void requestLocale({}, { locale: hostLocale }).then(respond).catch(() => respond(defaultLocale));
+}
+function serverError(error) {
+  const report = (locale) => process.stderr.write(`${errorNotice(error, locale)}\n`);
+  void requestLocale({}, { locale: hostLocale }).then(report).catch(() => report(defaultLocale));
+}
 function reply(id, value, isError = false) {
   send({
     jsonrpc: "2.0",
@@ -482,7 +495,7 @@ function reply(id, value, isError = false) {
 function handle(message) {
   const { id, method, params } = message;
   if (method === "initialize") {
-    send({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "graph", version: "1.0.0" } } });
+    send({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "graph", version: "1.0.5" } } });
     return;
   }
   if (method === "notifications/initialized" || method === "ping") { if (method === "ping") send({ jsonrpc: "2.0", id, result: {} }); return; }
@@ -490,10 +503,14 @@ function handle(message) {
   if (method === "tools/call") {
     callTool(params?.name, params?.arguments ?? {})
       .then((value) => reply(id, value))
-      .catch((error) => reply(id, String(error.message ?? error), true));
+      .catch(async (error) => {
+        let requestedLocale = defaultLocale;
+        try { requestedLocale = await requestLocale(params?.arguments ?? {}, { locale: hostLocale }); } catch {}
+        reply(id, errorNotice(error, requestedLocale), true);
+      });
     return;
   }
-  if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } });
+  if (id !== undefined) methodNotFound(id, method);
 }
 
 let buffer = "";
@@ -505,7 +522,7 @@ process.stdin.on("data", (chunk) => {
     const line = buffer.slice(0, index).trim();
     buffer = buffer.slice(index + 1);
     if (line) {
-      try { handle(JSON.parse(line)); } catch (error) { process.stderr.write(`graph server: ${error.message}\n`); }
+      try { handle(JSON.parse(line)); } catch (error) { serverError(error); }
     }
     index = buffer.indexOf("\n");
   }
@@ -538,8 +555,11 @@ async function recoverRunningGraphs() {
           if (latest.nodes.some((node) => node.status === "failed")) latest.status = "failed";
           writeGraph(root, latest);
           await emit(latest, "recovered");
-        }).catch((error) => {
-          process.stderr.write(`graph recovery: ${error.message}\n`);
+        }).catch(async (error) => {
+          let locale = defaultLocale;
+          try { locale = await requestLocale({}, { locale: hostLocale }); } catch {}
+          const code = String(error?.code ?? error?.cause?.code ?? "UNKNOWN");
+          process.stderr.write(`${noticeText("notice.recoveryFailed", { code }, locale)}\n`);
         });
       }
       const latest = readGraph(root, graph.conversation_id, graph.branch_id);

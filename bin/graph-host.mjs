@@ -9,3 +9,4 @@ export const branch = client.branch;
 export const agent = client.agent;
 export const roles = client.roles;
 export const event = client.event;
+export const locale = client.locale;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "graph",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Dependency graph execution through OpenAgent checkpoints.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-graph",
@@ -18,7 +18,67 @@
           "command": "bin/graph-command.mjs",
           "timeout_secs": 30
         }
-      ]
+      ],
+      "i18n": {
+        "supported_locales": ["en", "zh"],
+        "default_locale": "en",
+        "translations": {
+          "en": {
+            "display_name": "Graph",
+            "description": "Dependency graph execution through OpenAgent checkpoints.",
+            "commands.graph.label": "Graph",
+            "commands.graph.description": "Execute dependency-aware graph nodes.",
+            "notice.branchContext": "OpenAgent did not provide a branch context for Graph",
+            "notice.runMissing": "Graph run was not found for this conversation branch",
+            "notice.nodesRequired": "graph.nodes must be a non-empty array",
+            "notice.nodeFailed": "Graph node '{id}' ended with {phase}",
+            "notice.nodeMissing": "Graph node '{id}' does not exist",
+            "notice.nodeStarted": "Graph node '{id}' has already started",
+            "notice.nodeRequired": "Graph node '{id}' is still required",
+            "notice.nodeExists": "Graph node '{id}' already exists",
+            "notice.runTerminal": "Graph run {run} is already terminal",
+            "notice.deleteTerminal": "Graph must be terminal before deletion",
+            "notice.unknownTool": "Unknown tool: {name}",
+            "notice.methodMissing": "Method not found: {method}",
+            "notice.dataMissing": "PLUGIN_DATA is not set",
+            "notice.nodeFields": "graph nodes require non-empty id and task",
+            "notice.duplicateNode": "duplicate graph node '{id}'",
+            "notice.dependencyMissing": "unknown dependency '{id}'",
+            "notice.dependencyCycle": "graph dependencies contain a cycle",
+            "notice.commandRequest": "Could not read the Graph command request",
+            "notice.commandArguments": "conversation_id and argument are required",
+            "notice.recoveryFailed": "Graph recovery failed ({code})",
+            "notice.unexpected": "Graph operation failed ({code})"
+          },
+          "zh": {
+            "display_name": "Graph",
+            "description": "通过 OpenAgent 检查点执行依赖关系图任务。",
+            "commands.graph.label": "依赖图",
+            "commands.graph.description": "执行具有依赖关系的图节点。",
+            "notice.branchContext": "OpenAgent 未提供 Graph 所需的分支上下文",
+            "notice.runMissing": "在此会话分支中找不到 Graph 运行记录",
+            "notice.nodesRequired": "graph.nodes 必须是非空数组",
+            "notice.nodeFailed": "图节点“{id}”已以 {phase} 状态结束",
+            "notice.nodeMissing": "找不到图节点“{id}”",
+            "notice.nodeStarted": "图节点“{id}”已经启动",
+            "notice.nodeRequired": "图节点“{id}”仍被其他节点依赖",
+            "notice.nodeExists": "图节点“{id}”已存在",
+            "notice.runTerminal": "Graph 运行 {run} 已处于终止状态",
+            "notice.deleteTerminal": "只有终止状态的 Graph 才能删除",
+            "notice.unknownTool": "未知工具：{name}",
+            "notice.methodMissing": "找不到方法：{method}",
+            "notice.dataMissing": "未设置 PLUGIN_DATA",
+            "notice.nodeFields": "图节点必须包含非空的 id 和 task",
+            "notice.duplicateNode": "图节点“{id}”重复",
+            "notice.dependencyMissing": "找不到依赖节点“{id}”",
+            "notice.dependencyCycle": "图节点依赖关系中存在循环",
+            "notice.commandRequest": "无法读取 Graph 命令请求",
+            "notice.commandArguments": "必须提供 conversation_id 和 argument",
+            "notice.recoveryFailed": "Graph 恢复失败（{code}）",
+            "notice.unexpected": "Graph 操作失败（{code}）"
+          }
+        }
+      }
     }
   }
 }

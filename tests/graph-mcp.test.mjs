@@ -117,6 +117,25 @@ async function waitFor(predicate, timeoutMs = 2500) {
 }
 
 describe("Graph MCP package boundary", () => {
+  test("formats validation feedback in the live request locale", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-locale-"));
+    const host = await startHost();
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      const response = await mcp.callTool("create_goal_graph", {
+        _openagent: { conversation_id: "parent", branch_id: "branch", locale: "zh" },
+        graph: { nodes: [] },
+      });
+      expect(response.result.isError).toBe(true);
+      expect(response.result.content[0].text).toBe("graph.nodes 必须是非空数组");
+      expect(host.requests.some((request) => request.operation === "locale.get")).toBe(false);
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
   test("starts through node and wakes a child through the generic bridge", async () => {
     const manifest = JSON.parse(readFileSync(path.join(packageRoot, "mcp.json"), "utf8"));
     expect(manifest.mcpServers.graph.command).toBe("node");

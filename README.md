@@ -59,6 +59,14 @@ explicit Graph cancellation stops polling and cancels its children.
 New child conversations use their parent's workspace, even when another desktop
 conversation becomes active during scheduling.
 
+## Language support
+
+The package declares English and Chinese in `plugin.json`. OpenAgent supplies
+the current application language to each MCP call and through `locale.get` for
+the slash command. Plugin metadata, the command label, validation feedback, and
+operational notices follow that language. Graph IDs, node IDs, status values,
+and user-authored task text keep their original values.
+
 ## Development
 
 Stable GitHub releases include an installable ZIP with `plugin.json` at the

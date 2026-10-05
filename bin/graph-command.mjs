@@ -2,12 +2,14 @@
 
 import { readFileSync } from "node:fs";
 import { bootstrapPrompt } from "./lib/graph-bridge.mjs";
+import { createHostClient } from "./lib/openagent-host.mjs";
+import { defaultLocale, errorNotice, requestLocale } from "./i18n.mjs";
 
 function request() {
   try {
     return JSON.parse(readFileSync(0, "utf8"));
   } catch (error) {
-    throw new Error(`could not read Graph command request: ${error.message}`);
+    throw new Error("Could not read the Graph command request");
   }
 }
 
@@ -19,9 +21,13 @@ function main() {
   process.stdout.write(bootstrapPrompt(objective));
 }
 
+let host = null;
+let locale = defaultLocale;
 try {
+  if (process.env.OPENAGENT_PLUGIN_HOST_URL?.trim()) host = createHostClient();
+  try { locale = await requestLocale({}, host); } catch {}
   main();
 } catch (error) {
-  process.stderr.write(`graph command: ${error.message}\n`);
+  process.stderr.write(`${errorNotice(error, locale)}\n`);
   process.exit(1);
 }

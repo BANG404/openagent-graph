@@ -32,7 +32,7 @@ describe("Graph slash-command startup", () => {
       for await (const chunk of request) body += chunk;
       requests.push(JSON.parse(body));
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, result: {} }));
+      response.end(JSON.stringify({ ok: true, result: { version: 1, locale: "en" } }));
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     try {
@@ -60,7 +60,7 @@ describe("Graph slash-command startup", () => {
       const subsequent = await command(input, environment);
       expect(subsequent.code).toBe(0);
       expect(readGraph(root, "parent", "branch")).toEqual(before);
-      expect(requests).toEqual([]);
+      expect(requests.map((request) => request.operation)).toEqual(["locale.get", "locale.get"]);
     } finally {
       await new Promise((resolve) => server.close(resolve));
       rmSync(root, { recursive: true, force: true });
