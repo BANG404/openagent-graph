@@ -10,6 +10,12 @@ const mcpScript = path.join(packageRoot, "bin", "graph-mcp.mjs");
 
 async function startHost({ childState, wakeState } = {}) {
   const requests = [];
+  const awake = new Set();
+  const completed = {
+    phase: "final_completed",
+    checkpoint_id: "child-checkpoint",
+    messages: [{ role: "assistant", text: "node complete" }],
+  };
   let childNumber = 0;
   const server = createServer(async (request, response) => {
     let body = "";
@@ -23,16 +29,14 @@ async function startHost({ childState, wakeState } = {}) {
     } else if (parsed.operation === "conversation.state") {
       result = parsed.args.conv_id === "parent"
         ? { branch_id: parsed.args.branch_id ?? null, workspace: "parent-workspace" }
-        : childState?.() ?? { branch_id: parsed.args.branch_id ?? null, workspace: "" };
+        : childState?.(parsed.args) ?? (awake.has(parsed.args.conv_id)
+          ? wakeState ?? completed
+          : { branch_id: parsed.args.branch_id ?? null, workspace: "" });
     } else if (parsed.operation === "agent.wake") {
-      result = {
-        accepted: true,
-        state: wakeState ?? {
-          phase: "final_completed",
-          checkpoint_id: "child-checkpoint",
-          messages: [{ role: "assistant", text: "node complete" }],
-        },
-      };
+      awake.add(parsed.args.conv_id);
+      result = parsed.args.wait === false
+        ? { accepted: true }
+        : { accepted: true, state: wakeState ?? completed };
     } else if (parsed.operation === "conversation.flow.set") {
       result = { checkpoint_id: "projection-checkpoint" };
     } else if (parsed.operation === "event.emit") {
@@ -155,6 +159,7 @@ describe("Graph MCP package boundary", () => {
       expect(response.result.isError).not.toBe(true);
       await waitFor(() => host.requests.some((request) => request.operation === "agent.wake"));
       const wake = host.requests.find((request) => request.operation === "agent.wake");
+      expect(wake.args.wait).toBe(false);
       expect((wake.args.request ?? wake.args).branch_id).toBe("child-branch-1");
       expect(host.requests.some((request) => request.operation === "conversation.flow.set")).toBe(true);
       expect(host.requests.some((request) => request.operation === "conversation.create")).toBe(true);
@@ -181,6 +186,48 @@ describe("Graph MCP package boundary", () => {
       rmSync(dataRoot, { recursive: true, force: true });
     }
   });
+
+  test("a child running longer than the bridge timeout completes before its dependent starts", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-long-child-"));
+    const empty = { phase: null, checkpoint_id: "projection-only", messages: [] };
+    let detail = empty;
+    const host = await startHost({ childState: ({ conv_id }) => conv_id === "child-1" ? detail : undefined });
+    const mcp = await startMcp(dataRoot, host.url);
+    const context = { conversation_id: "parent", branch_id: "parent-branch" };
+    try {
+      const response = await mcp.callTool("create_goal_graph", {
+        _openagent: context,
+        graph: { nodes: [{ id: "research", task: "Long research" }, { id: "summary", task: "Summarize", depends_on: ["research"] }] },
+      });
+      const { run_id } = JSON.parse(response.result.content[0].text);
+      await waitFor(() => host.requests.some((request) => request.operation === "agent.wake"));
+      expect(host.requests.find((request) => request.operation === "agent.wake").args.wait).toBe(false);
+      // The accepted wake has no state. Poll the queued projection checkpoint
+      // first, then keep real execution running beyond the 15-second timeout.
+      await waitFor(() => host.requests.filter((request) => request.operation === "conversation.state" && request.args.conv_id === "child-1").length >= 2);
+      detail = { phase: "before_completion", checkpoint_id: "in-progress", messages: [{ role: "assistant", text: "Still researching" }] };
+      await new Promise((resolve) => setTimeout(resolve, 15_500));
+      const progress = await mcp.callTool("graph_read", { _openagent: context, run_id, wait_secs: 0 });
+      const pending = JSON.parse(progress.result.content[0].text);
+      expect(pending.status).toBe("running");
+      expect(pending.graph.items.map((item) => item.status)).toEqual(["running", "pending"]);
+      expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(1);
+      detail = { phase: "final_completed", checkpoint_id: "research-result", messages: [{ role: "assistant", text: "Actual long research result" }] };
+      await waitFor(() => readGraph(dataRoot, "parent", "parent-branch")?.status === "completed");
+      const saved = readGraph(dataRoot, "parent", "parent-branch");
+      expect(saved.nodes[0].child_checkpoint_id).toBe("research-result");
+      expect(saved.nodes[0].result).toBe("Actual long research result");
+      const wakes = host.requests.filter((request) => request.operation === "agent.wake");
+      expect(wakes).toHaveLength(2);
+      expect(wakes[1].args.text).toContain("Actual long research result");
+      expect(wakes.every((request) => request.args.wait === false)).toBe(true);
+      expect(host.requests.filter((request) => request.operation === "conversation.state" && request.args.conv_id === "child-1").every((request) => request.args.branch_id === "child-branch-1")).toBe(true);
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }, 25_000);
 
   test.each(["final_completed", "final_failed", "final_cancelled"])(
     "keeps an interrupted child pending until %s, then publishes its actual outcome",

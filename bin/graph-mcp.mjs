@@ -242,7 +242,7 @@ async function runNode(conversationId, branchId, runId, nodeId) {
       assistant_message_id: assistantMessageId,
       hidden: true,
       flow: flowProjection(graph),
-    }, { wait: true });
+    }, { wait: false });
   const finished = await waitForChild(conversationId, branchId, runId, current, response?.state);
   if (!finished) return;
   const messages = finished.messages ?? [];
@@ -495,7 +495,7 @@ function reply(id, value, isError = false) {
 function handle(message) {
   const { id, method, params } = message;
   if (method === "initialize") {
-    send({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "graph", version: "1.0.5" } } });
+    send({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "graph", version: "1.0.7" } } });
     return;
   }
   if (method === "notifications/initialized" || method === "ping") { if (method === "ping") send({ jsonrpc: "2.0", id, result: {} }); return; }

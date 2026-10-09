@@ -15,6 +15,11 @@ namespaced route. `mcp.json` starts `bin/graph-mcp.mjs`, which persists Graph
 state under `PLUGIN_DATA/graphs/` and wakes child Agents through
 `agent.wake`.
 
+Child wakes return immediately with `wait: false`; the scheduler polls the
+recorded child branch for its terminal phase. Node execution can exceed the
+bridge client's 15-second HTTP timeout without being marked failed. Queued,
+running, and interrupted children keep their dependents pending.
+
 The slash command only supplies the planning/execution prompt. It does not
 write package state or publish an empty running projection. A Graph starts
 when the Agent successfully calls `create_goal_graph`; that tool persists the
