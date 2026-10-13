@@ -117,6 +117,8 @@
           document.documentElement.lang = ctx?.locale || "en";
           $("skeleton").setAttribute("aria-label", text("loading"));
           $("empty").textContent = text("empty");
+          $("summary").hidden = !graph?.summary;
+          if (!$("error").hidden) $("error").textContent = text("error");
           if (!graph) return;
           const opened = new Set([...document.querySelectorAll("details[open]")].map((node) => node.closest(".node").dataset.id));
           const canvas = $("canvas");
