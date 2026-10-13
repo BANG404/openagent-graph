@@ -121,6 +121,29 @@ async function waitFor(predicate, timeoutMs = 2500) {
 }
 
 describe("Graph MCP package boundary", () => {
+  test("sidebar reads parent/child diagrams with empty sender context and rejects other workspaces", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-view-mcp-"));
+    const graph = newGraph("parent", "branch", "View", [{ id: "first", task: "First" }, { id: "second", task: "Second", depends_on: ["first"] }]);
+    graph.status = "completed";
+    Object.assign(graph.nodes[0], { status: "completed", child_conv_id: "child", child_branch_id: "child-branch", result: "Complete" });
+    graph.nodes[1].status = "completed";
+    writeGraph(dataRoot, graph);
+    const host = await startHost({ childState: () => ({ workspace: "parent-workspace" }) });
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      for (const [conversation_id, branch_id] of [["parent", "branch"], ["child", "child-branch"]]) {
+        const reply = await mcp.callTool("graph_view", { conversation_id, branch_id, _openagent: { conversation_id: "", branch_id: "", workspace: "parent-workspace", locale: "en" } });
+        expect(reply.result.isError).not.toBe(true);
+        expect(JSON.parse(reply.result.content[0].text).graph.nodes[1].depends_on).toEqual(["first"]);
+      }
+      const sibling = await mcp.callTool("graph_view", { conversation_id: "parent", branch_id: "sibling", _openagent: { workspace: "parent-workspace" } });
+      expect(JSON.parse(sibling.result.content[0].text).graph).toBeNull();
+      const rejected = await mcp.callTool("graph_view", { conversation_id: "parent", branch_id: "branch", _openagent: { workspace: "other", locale: "zh" } });
+      expect(rejected.result.isError).toBe(true);
+      expect(rejected.result.content[0].text).toBe("该会话不属于当前工作区");
+      expect(host.requests.some((request) => request.operation === "agent.wake")).toBe(false);
+    } finally { await mcp.stop(); await host.close(); rmSync(dataRoot, { recursive: true, force: true }); }
+  });
   test("formats validation feedback in the live request locale", async () => {
     const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-graph-locale-"));
     const host = await startHost();

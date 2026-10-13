@@ -37,6 +37,25 @@ register, inspect, or execute a Graph implementation based on that string.
 
 ## State and recovery
 
+The package's `ui/graph.html` sidebar restores the layered dependency diagram:
+node cards, curved directional paths, live status colors, completion count,
+dependency IDs, expandable results and summary. `graph_view` reads package data
+for the exact parent or recorded child branch, validates the requested
+conversation's workspace through the Host Bridge, and never schedules work.
+The sidebar polls this read-only tool, recalculates paths after resizing or
+expanding results, clears previous content immediately on scope changes, ignores
+late replies, and supports live English/Chinese and light/dark changes. Text is
+rendered as text, including tool results. Loading and retry states keep failures
+visible without clearing an already displayed diagram.
+
+The declared view's namespaced ID matches the package's opaque `flow_id`.
+OpenAgent uses this generic identity to activate the panel on parent and child
+branches and select it when a new flow opens. Graph semantics and layout stay
+in this package; the common progress projection remains the fallback.
+Run `bun test tests` for package coverage and select
+`BLACKBOX_PLUGIN_IDS=graph` with OpenAgent's
+`bun run test:blackbox:plugin-functionality` for native diagram verification.
+
 Each parent conversation branch has one package-owned Graph record. Nodes are
 validated as a DAG, marked started before their child conversation is created,
 and reduced serially as child Agent turns finish. A node stores its child

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "graph",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Dependency graph execution through OpenAgent checkpoints.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-graph",
@@ -9,7 +9,17 @@
   "extensions": {
     "openagent": {
       "mcp_tool_mode": "direct",
-      "capabilities": ["command", "mcp"],
+      "capabilities": ["command", "mcp", "sidebar"],
+      "sidebar": [
+        {
+          "id": "graph",
+          "title": "Graph",
+          "entry": "ui/graph.html",
+          "scope": "conversation",
+          "activation_tools": ["create_goal_graph", "update_goal_graph", "graph_read", "cancel_goal_graph", "delete_goal_graph"],
+          "capabilities": ["workspace", "conversation", "branch", "locale", "theme"]
+        }
+      ],
       "commands": [
         {
           "id": "graph",
@@ -25,6 +35,9 @@
         "default_locale": "en",
         "translations": {
           "en": {
+            "sidebar.graph.title": "Graph",
+            "notice.viewContext": "conversation and branch context are required",
+            "notice.conversationWorkspace": "Conversation is outside the current workspace",
             "display_name": "Graph",
             "description": "Dependency graph execution through OpenAgent checkpoints.",
             "commands.graph.label": "Graph",
@@ -52,6 +65,9 @@
             "notice.unexpected": "Graph operation failed ({code})"
           },
           "zh": {
+            "sidebar.graph.title": "任务图",
+            "notice.viewContext": "必须提供会话和分支上下文",
+            "notice.conversationWorkspace": "该会话不属于当前工作区",
             "display_name": "任务图",
             "description": "通过 OpenAgent 检查点执行依赖关系图任务。",
             "commands.graph.label": "依赖图",

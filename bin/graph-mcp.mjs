@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { agent, conversation, event, locale as hostLocale, requireConversationContext } from "./graph-host.mjs";
+import { agent, context, conversation, event, locale as hostLocale, requireConversationContext } from "./graph-host.mjs";
+import { readGraphView } from "./graph-view.mjs";
 import { flowProjection, nodePrompt, publishGraph } from "./lib/graph-bridge.mjs";
 import {
   appendUpdate,
@@ -30,6 +31,15 @@ function runMutation(fn) {
 }
 
 const TOOLS = [
+  {
+    name: "graph_view",
+    description: "Read the dependency diagram for an exact parent or child conversation branch. Display only; does not start or advance a run.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      required: ["conversation_id", "branch_id"],
+      properties: { conversation_id: { type: "string", minLength: 1 }, branch_id: { type: "string", minLength: 1 } },
+    },
+  },
   {
     name: "create_goal_graph",
     description:
@@ -442,6 +452,15 @@ async function readProgress(args) {
 }
 
 async function callTool(name, args) {
+  if (name === "graph_view") {
+    const conversationId = String(args?.conversation_id ?? "").trim();
+    const branchId = String(args?.branch_id ?? "").trim();
+    const { workspace } = context(args);
+    if (!conversationId || !branchId || !workspace) throw new Error("conversation and branch context are required");
+    const selected = await conversation.state(conversationId, branchId);
+    if (selected.workspace !== workspace) throw new Error("Conversation is outside the current workspace");
+    return result({ graph: readGraphView(root, conversationId, branchId) });
+  }
   if (name === "create_goal_graph") return result(await startGraph(args));
   if (name === "update_goal_graph") return result(await updateGraph(args));
   if (name === "graph_read") return result(await readProgress(args));
@@ -495,7 +514,7 @@ function reply(id, value, isError = false) {
 function handle(message) {
   const { id, method, params } = message;
   if (method === "initialize") {
-    send({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "graph", version: "1.0.7" } } });
+    send({ jsonrpc: "2.0", id, result: { protocolVersion: params?.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "graph", version: "1.0.8" } } });
     return;
   }
   if (method === "notifications/initialized" || method === "ping") { if (method === "ping") send({ jsonrpc: "2.0", id, result: {} }); return; }

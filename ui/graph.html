@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: light; --surface:#fff; --text:#1d1d1f; --muted:#7a7a7a; --border:#e0e0e0; --primary:#0066cc; --success:#18794e; --danger:#b42318; }
+      :root.dark { color-scheme:dark; --surface:#252527; --text:#f5f5f7; --muted:#a1a1a6; --border:#424245; --primary:#2997ff; --success:#4ade80; --danger:#ff6961; }
+      * { box-sizing:border-box; }
+      [hidden] { display:none !important; }
+      html,body { height:100%; margin:0; }
+      body { display:flex; flex-direction:column; color:var(--text); background:var(--surface); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:11px; }
+      header { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--border); }
+      #objective { flex:1; min-width:0; margin:0; font-size:11px; font-weight:500; overflow-wrap:anywhere; }
+      #progress { color:var(--muted); white-space:nowrap; font-size:10px; }
+      #viewport { flex:1; min-height:0; overflow:auto; padding:12px 10px 20px; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+      #canvas { display:grid; position:relative; width:100%; gap:28px; padding:2px 4px; }
+      #edges { position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; }
+      .edge { fill:none; stroke:var(--muted); stroke-width:1.2; stroke-linecap:round; opacity:.42; vector-effect:non-scaling-stroke; }
+      .edge.running { stroke:var(--primary); opacity:.62; }
+      .edge.completed { stroke:var(--success); opacity:.7; }
+      .edge.failed,.edge.blocked { stroke:var(--danger); opacity:.75; }
+      .layer { position:relative; z-index:1; display:grid; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+      .layer.single { grid-template-columns:minmax(0,min(240px,100%)); justify-content:center; }
+      .node { display:flex; flex-direction:column; min-width:0; min-height:74px; gap:4px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
+      .node.running { background:color-mix(in srgb,var(--primary) 3%,var(--surface)); }
+      .node.failed,.node.blocked { background:color-mix(in srgb,var(--danger) 3%,var(--surface)); }
+      .node-header { display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; }
+      code { overflow-wrap:anywhere; color:var(--muted); font-size:10px; }
+      .status { flex-shrink:0; color:var(--muted); font-size:9px; border-radius:4px; padding:1px 6px; }
+      .running .status { color:var(--primary); background:color-mix(in srgb,var(--primary) 11%,transparent); }
+      .completed .status { color:var(--success); background:color-mix(in srgb,var(--success) 10%,transparent); }
+      .failed .status,.blocked .status { color:var(--danger); background:color-mix(in srgb,var(--danger) 10%,transparent); }
+      .node strong { font-size:11px; font-weight:500; line-height:1.4; overflow-wrap:anywhere; }
+      .dependencies,.node small { color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; white-space:pre-wrap; }
+      details summary { cursor:pointer; color:var(--muted); font-size:10px; }
+      details small { display:block; margin-top:4px; }
+      #summary { margin:0; padding:8px 12px; border-top:1px solid var(--border); color:var(--muted); overflow-wrap:anywhere; }
+      #empty,#error { margin:auto; padding:16px; color:var(--muted); text-align:center; }
+      #error { color:var(--danger); }
+      #skeleton { padding:12px; display:grid; gap:28px; }
+      #skeleton div { height:74px; border-radius:8px; background:color-mix(in srgb,var(--muted) 10%,var(--surface)); }
+    </style>
+  </head>
+  <body>
+    <header hidden><h1 id="objective"></h1><span id="progress"></span></header>
+    <div id="skeleton" role="status"><div></div><div></div><div></div></div>
+    <p id="empty" hidden></p><p id="error" role="alert" hidden></p>
+    <div id="viewport" hidden><div id="canvas" role="list"><svg id="edges" aria-hidden="true"></svg></div></div>
+    <p id="summary" hidden></p>
+    <script>
+      (() => {
+        const $ = (id) => document.getElementById(id);
+        const svgNS = "http://www.w3.org/2000/svg";
+        const statuses = ["pending", "running", "completed", "failed", "blocked", "cancelled"];
+        const copy = {
+          en: { pending:"Pending", running:"Running", completed:"Completed", failed:"Failed", blocked:"Blocked", cancelled:"Cancelled", dependencies:"Depends on", result:"Result", empty:"No Graph on this branch.", unavailable:"Graph display requires the plugin tool bridge.", loading:"Loading Graph…", error:"Could not load Graph. Retrying…" },
+          zh: { pending:"待执行", running:"执行中", completed:"已完成", failed:"失败", blocked:"受阻", cancelled:"已取消", dependencies:"依赖", result:"结果", empty:"此分支没有任务图。", unavailable:"任务图展示需要插件工具桥接。", loading:"正在加载任务图…", error:"无法加载任务图，正在重试…" },
+        };
+        let ctx, graph = null, generation = 0, timer, layoutFrame, fingerprint = "", sequence = 0;
+        const pending = new Map();
+        const text = (key) => copy[ctx?.locale?.startsWith("zh") ? "zh" : "en"][key] || key;
+        const status = (value) => statuses.includes(value) ? value : "pending";
+        function element(tag, className, content) {
+          const node = document.createElement(tag);
+          node.className = className;
+          if (content != null) node.textContent = content;
+          return node;
+        }
+        function svg(tag, attributes) {
+          const node = document.createElementNS(svgNS, tag);
+          for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+          return node;
+        }
+        function layers(nodes) {
+          const remaining = new Map(nodes.map((node) => [node.id, node]));
+          const done = new Set(), output = [];
+          while (remaining.size) {
+            const layer = [...remaining.values()].filter((node) => node.depends_on.every((id) => done.has(id) || !remaining.has(id)));
+            if (!layer.length) { output.push([...remaining.values()]); break; }
+            output.push(layer);
+            for (const node of layer) { remaining.delete(node.id); done.add(node.id); }
+          }
+          return output;
+        }
+        function drawEdges() {
+          const edges = $("edges");
+          edges.replaceChildren();
+          if (!graph) return;
+          const defs = svg("defs", {});
+          for (const state of statuses) {
+            const marker = svg("marker", { id:`arrow-${state}`, viewBox:"0 0 8 8", refX:"7", refY:"4", markerWidth:"6", markerHeight:"6", orient:"auto" });
+            const color = state === "running" ? "primary" : state === "completed" ? "success" : ["failed","blocked"].includes(state) ? "danger" : "muted";
+            marker.append(svg("path", { d:"M 0 0 L 8 4 L 0 8 z", fill:`var(--${color})` }));
+            defs.append(marker);
+          }
+          edges.append(defs);
+          const canvasRect = $("canvas").getBoundingClientRect();
+          const elements = new Map([...document.querySelectorAll(".node")].map((node) => [node.dataset.id, node]));
+          for (const node of graph.nodes) {
+            const target = elements.get(node.id);
+            if (!target) continue;
+            for (const dependency of new Set(node.depends_on)) {
+              const source = elements.get(dependency);
+              if (!source || source === target) continue;
+              const a = source.getBoundingClientRect(), b = target.getBoundingClientRect();
+              const x1 = a.left + a.width / 2 - canvasRect.left, y1 = a.bottom - canvasRect.top;
+              const x2 = b.left + b.width / 2 - canvasRect.left, y2 = b.top - canvasRect.top;
+              const offset = Math.max(10, (y2 - y1) / 2);
+              edges.append(svg("path", { class:`edge ${status(node.status)}`, "data-from":dependency, "data-to":node.id, d:`M ${x1} ${y1} C ${x1} ${y1 + offset}, ${x2} ${y2 - offset}, ${x2} ${y2}`, "marker-end":`url(#arrow-${status(node.status)})` }));
+            }
+          }
+        }
+        function scheduleLayout() { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(drawEdges); }
+        function render() {
+          document.documentElement.classList.toggle("dark", ctx?.theme === "dark");
+          document.documentElement.lang = ctx?.locale || "en";
+          $("skeleton").setAttribute("aria-label", text("loading"));
+          $("empty").textContent = text("empty");
+          if (!graph) return;
+          const opened = new Set([...document.querySelectorAll("details[open]")].map((node) => node.closest(".node").dataset.id));
+          const canvas = $("canvas");
+          canvas.replaceChildren($("edges"));
+          $("objective").textContent = graph.objective;
+          $("progress").textContent = `${graph.nodes.filter((node) => node.status === "completed").length}/${graph.nodes.length} · ${text(graph.status)}`;
+          for (const layer of layers(graph.nodes)) {
+            const row = element("div", `layer${layer.length === 1 ? " single" : ""}`);
+            for (const node of layer) {
+              const card = element("div", `node ${status(node.status)}`);
+              card.dataset.id = node.id; card.setAttribute("role", "listitem");
+              const header = element("div", "node-header");
+              header.append(element("code", "", node.id), element("span", "status", text(node.status)));
+              card.append(header, element("strong", "", node.task));
+              if (node.depends_on.length) card.append(element("span", "dependencies", `${text("dependencies")}: ${node.depends_on.join(", ")}`));
+              if (node.result) {
+                const detail = element("details", ""); detail.open = opened.has(node.id);
+                detail.append(element("summary", "", text("result")), element("small", "", node.result));
+                card.append(detail);
+              }
+              row.append(card);
+            }
+            canvas.append(row);
+          }
+          $("summary").textContent = graph.summary || "";
+          $("summary").hidden = !graph.summary;
+          scheduleLayout();
+        }
+        function request() {
+          const request_id = `graph-${++sequence}`, scope = ctx.scope;
+          return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => { pending.delete(request_id); reject(new Error("timeout")); }, 20000);
+            pending.set(request_id, { resolve, reject, timeout, scope });
+            parent.postMessage({ type:"openagent:sidebar-tool-call", version:1, scope, request_id, tool_name:"graph_view", arguments:{ conversation_id:ctx.conversation_id, branch_id:ctx.branch_id } }, "*");
+          });
+        }
+        async function refresh() {
+          const current = generation;
+          clearTimeout(timer);
+          if (!ctx?.tool_calls || !ctx.conversation_id || !ctx.branch_id) {
+            $("skeleton").hidden = true; $("empty").hidden = false;
+            $("empty").textContent = text("unavailable"); return;
+          }
+          try {
+            const data = await request();
+            if (current !== generation) return;
+            const next = JSON.stringify(data.graph);
+            graph = data.graph;
+            $("error").hidden = true; $("empty").hidden = !!graph;
+            document.querySelector("header").hidden = !graph; $("viewport").hidden = !graph;
+            if (next !== fingerprint) { fingerprint = next; render(); }
+          } catch {
+            if (current !== generation) return;
+            $("error").textContent = text("error"); $("error").hidden = false;
+          } finally {
+            if (current === generation) { $("skeleton").hidden = true; timer = setTimeout(refresh, 1000); }
+          }
+        }
+        window.addEventListener("message", (event) => {
+          const data = event.data;
+          if (event.source !== parent || data?.version !== 1) return;
+          if (data.type === "openagent:sidebar-tool-result") {
+            const wait = pending.get(data.request_id);
+            if (!wait || wait.scope !== data.scope) return;
+            clearTimeout(wait.timeout); pending.delete(data.request_id);
+            if (!data.ok || data.result?.isError) { wait.reject(new Error("tool failed")); return; }
+            try { wait.resolve(data.result.structuredContent ?? JSON.parse(data.result.content.find((part) => part.type === "text").text)); }
+            catch (error) { wait.reject(error); }
+          } else if (data.type === "openagent:sidebar-context") {
+            const changed = !ctx || ctx.scope !== data.scope || ctx.workspace !== data.workspace || ctx.conversation_id !== data.conversation_id || ctx.branch_id !== data.branch_id;
+            ctx = data;
+            if (changed) {
+              ++generation; clearTimeout(timer);
+              for (const wait of pending.values()) { clearTimeout(wait.timeout); wait.reject(new Error("scope changed")); }
+              pending.clear(); graph = null; fingerprint = "";
+              $("canvas").replaceChildren($("edges")); $("edges").replaceChildren();
+              document.querySelector("header").hidden = true; $("viewport").hidden = true; $("summary").hidden = true;
+              $("empty").hidden = true; $("error").hidden = true; $("skeleton").hidden = false;
+            }
+            render();
+            if (changed) void refresh();
+          }
+        });
+        new ResizeObserver(scheduleLayout).observe($("canvas"));
+        document.addEventListener("toggle", scheduleLayout, true);
+        parent.postMessage({ type:"openagent:sidebar-ready", version:1 }, "*");
+      })();
+    </script>
+  </body>
+</html>

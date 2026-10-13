@@ -31,3 +31,11 @@ future execution or claiming that a run exists.
 The package's `plugin:graph:graph` flow identifier is an opaque projection key
 chosen by this package. Runtime only validates the authenticated plugin owner
 and stores the projection; it does not provide or register Graph behavior.
+
+The Graph sidebar uses the same identifier as its declared view to activate on
+parent and recorded child branches. Keep DAG layout, paths, statuses and results
+inside `ui/graph.html`; do not add Graph-specific rendering to the host. Its
+read-only `graph_view` accepts exact conversation/branch IDs and validates the
+host-supplied workspace. Empty Agent sender IDs from the sidebar are expected.
+Do not use progress polling to wake or resume a run. Preserve scope reset,
+stale-reply rejection, resizing, localized states and text-only result rendering.
