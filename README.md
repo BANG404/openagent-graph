@@ -1,4 +1,6 @@
-# OpenAgent Graph
+# Task Orchestration
+
+Split work into dependent tasks, run independent tasks in parallel, and view progress and results in a task graph.
 
 The standard Agent Plugin package for dependency aware Graph execution. The
 package owns the graph schema, reducer, persistence, child conversations,
